@@ -44,6 +44,8 @@ class Agent:
         self.state_size = state_size
         self.action_size = action_size
         self.seed = random.seed(random_seed)
+        # Noise process
+        self.noise = OUNoise(action_size, random_seed)
 
 
 
@@ -79,6 +81,8 @@ class Agent:
         # Initialize for later gradient calculations
         self.sess.run(tf.global_variables_initializer())
 
+    def reset(self):
+        self.noise.reset()
 
     def learn(self, experiences, gamma):
         """Update policy and value parameters using given batch of experience tuples.
@@ -225,12 +229,15 @@ class Agent:
             experiences = self.memory.sample()
             self.learn(experiences, GAMMA)
 
-    def act(self, state):
+    def act(self, state, add_noise):
         """Returns actions for given state as per current policy."""
         state=np.array([state])
 
         action = self.actor_local.predict(state)[0]
-        return action
+        if add_noise:
+            action += self.noise.sample()
+        return np.clip(action, 0, 1)
+
 
 
 
@@ -251,3 +258,26 @@ class Agent:
             target_weights[i] = tau * local_weights[i] + (1 - tau)* target_weights[i]
 
         target_model.set_weights(target_weights)
+
+
+class OUNoise:
+    """Ornstein-Uhlenbeck process."""
+
+    def __init__(self, size, seed, mu=0., theta=0.15, sigma=0.2):
+        """Initialize parameters and noise process."""
+        self.mu = mu * np.ones(size)
+        self.theta = theta
+        self.sigma = sigma
+        self.seed = random.seed(seed)
+        self.reset()
+
+    def reset(self):
+        """Reset the internal state (= noise) to mean (mu)."""
+        self.state = copy.copy(self.mu)
+
+    def sample(self):
+        """Update internal state and return it as a noise sample."""
+        x = self.state
+        dx = self.theta * (self.mu - x) + self.sigma * np.array([random.random() for i in range(len(x))])
+        self.state = x + dx
+        return self.state
