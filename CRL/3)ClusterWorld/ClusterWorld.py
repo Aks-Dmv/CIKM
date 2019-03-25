@@ -22,12 +22,12 @@ class ClusterWorldEnv:
     def __init__(self):
         # General variables defining the environment
         self._trueDf=pd.read_csv("../data/dataPts.csv")
-        self._trueBoundaries=np.array([[-1,4],[1,6]])
+        self._trueBoundaries=np.array([[-1.,4.],[1.,6.]])
 
 
         # Our ouput should be in the form of
         # (N output variables, one stop variable) and one regressor variable
-        SoftMaxOutput = np.tile( [0,1], (len(self._trueBoundaries)+1,1) )
+        SoftMaxOutput = np.tile( [0.,1.], (len(self._trueBoundaries)+1,1) )
         Regr=np.array([[self._trueBoundaries.min(), self._trueBoundaries.max()]])
         self.action_space = np.concatenate((SoftMaxOutput, Regr), axis=0)
 
@@ -38,11 +38,12 @@ class ClusterWorldEnv:
         self.actionstatepairs=[]
         self.df=copy.deepcopy(self._trueDf)
         self.inheritedN=0
-        self._infoRewardMultiplier=100
+        self._infoRewardMultiplier=1000
         self.penalty=-1
-        self.Quitpenalty=-100
+        self._Quitpenalty=-1000
         self.reward=0
         self.done=False
+        self._maxRegressVal=10
 
     def reset(self):
         """
@@ -56,12 +57,6 @@ class ClusterWorldEnv:
         self.actionstatepairs=[]
         self.df=copy.deepcopy(self._trueDf)
         self.inheritedN=0
-        if(self.reward<=20):
-            # we are going to penalize
-            # cheating by trying to choose done
-            self.Quitpenalty=-100
-        else:
-            self.Quitpenalty=-1
         self.penalty=-1
         self.reward=0
         self.done=False
@@ -70,6 +65,7 @@ class ClusterWorldEnv:
     def _get_state(self):
         """Get the observation."""
         ob = copy.deepcopy(self.observation_space_Matrix)
+        #print(ob)
         ob = np.reshape(ob,(1,4))[0]
         return ob
 
@@ -81,8 +77,8 @@ class ClusterWorldEnv:
         #the tempDim value has been hard coded
         # because of the dataset
         tempDim=1-dim
-        dimRange=TRUE_BOUNDARIES[tempDim][1]-TRUE_BOUNDARIES[tempDim][0]
-        valNew=(val-TRUE_BOUNDARIES[tempDim][0])/dimRange
+        dimRange=self._trueBoundaries[tempDim][1]-self._trueBoundaries[tempDim][0]
+        valNew=(val-self._trueBoundaries[tempDim][0])/dimRange
 
         return valNew
 
@@ -92,7 +88,7 @@ class ClusterWorldEnv:
             #print("empty list")
             return
         prevI=self.actionstatepairs[0]
-        Max_Render_space=copy.deepcopy(TRUE_BOUNDARIES)
+        Max_Render_space=copy.deepcopy(self._trueBoundaries)
         for i in self.actionstatepairs:
             #print(i)
             if(i[0]==1):
@@ -112,8 +108,10 @@ class ClusterWorldEnv:
         plt.close()
 
     def updateState(self):
-        i=self.actionstatepairs[-1]
+        i=copy.deepcopy(self.actionstatepairs[-1])
+
         self.observation_space_Matrix[int(i[0])][1-int(i[2])]=i[1]
+
 
 
     def step(self,action):
@@ -124,15 +122,25 @@ class ClusterWorldEnv:
             # If you are here, then the stop variable has been flagged
             self.done=True
             bounds=self._get_state()
-            self.reward=self.Quitpenalty
+            self.reward=self._Quitpenalty/(len(self.actionstatepairs)+1)
             return bounds, self.reward,self.done,None
 
         # If we have not returned yet, then that means the softmaxOut represents which dim
         dim=softmaxOut
-        actionMultiFactor=(self.observation_space_Matrix[dim][1]-self.observation_space_Matrix[dim][0])
+        actionMultiFactor=(self.observation_space_Matrix[dim][1]-self.observation_space_Matrix[dim][0])/self._maxRegressVal
         val=regrOut*actionMultiFactor+self.observation_space_Matrix[dim][0]
         #print("1val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1]",val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1])
-        if(val<=self.observation_space_Matrix[dim][0] or val>=self.observation_space_Matrix[dim][1]):
+
+        # to check if the regressor is out of bounds
+        if(val<=self.observation_space_Matrix[dim][0]):
+            lessTh=True
+        else:
+            lessTh=False
+        if(val>=self.observation_space_Matrix[dim][1]):
+            greaterTh=True
+        else:
+            greaterTh=False
+        if(lessTh or greaterTh):
             # you exceeded the boundary
             # this includes selecting the boundary
             # Thus, your action was wrong
@@ -142,12 +150,17 @@ class ClusterWorldEnv:
             # however, the S,A,R,S will be stored by the agent
             self.done=False
             bounds=self._get_state()
-            self.reward=-1
+            if(lessTh):
+                deltaBounds=self.observation_space_Matrix[dim][0]-val
+
+            if(greaterTh):
+                deltaBounds=val-self.observation_space_Matrix[dim][1]
+            self.reward=self._Quitpenalty*(abs(deltaBounds))
             return bounds, self.reward,self.done,None
 
         #print("2val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1]",val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1])
         Up= int(np.random.random(1)>0.5)
-
+        #Up=1
 
         # Checking for a corner case
         if(len(self.df.index)==0):
@@ -174,6 +187,7 @@ class ClusterWorldEnv:
             self.inheritedN=N2
 
         self.actionstatepairs.append([int(dim),val,int(Up)])
+        #print("updatingState")
         self.updateState()
 
         bounds=self._get_state()

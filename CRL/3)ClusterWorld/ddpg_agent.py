@@ -7,24 +7,28 @@ from replay_buffer import ReplayBuffer
 import tensorflow as tf
 from keras import backend as K
 from keras.layers import Dense, Input, Add, Activation,LeakyReLU
-from keras.layers import GaussianNoise, Dropout, Concatenate
+from keras.layers import GaussianNoise, Concatenate
 from keras.models import Model
 from keras.optimizers import Adam
 
 NUM_DIM=2
 NUM_ACTIONS = NUM_DIM+2
 TREE_DEPTH=8
-BUFFER_SIZE = int(1e3)  # replay buffer size
-BATCH_SIZE = 64        # minibatch size
+BUFFER_SIZE = int(1e4)  # replay buffer size
+BATCH_SIZE = 512        # minibatch size
 GAMMA = 0.9            # discount factor
 TAU = 1e-3              # for soft update of target parameters
 LR_ACTOR = 1e-4         # learning rate of the actor
 LR_CRITIC = 1e-3        # learning rate of the critic
 
+EPSILON_DECAY = 10000
+FINAL_EPSILON = 0.1
+INITIAL_EPSILON = 1.0
+
 # Fully Connected Layer's size was set to
 # 2*NUM_ACTIONS
-FC_ACTOR = 4*NUM_ACTIONS
-FC_CRITIC = 4*NUM_ACTIONS
+FC_ACTOR = 8*NUM_ACTIONS
+FC_CRITIC = 8*NUM_ACTIONS
 
 
 class Agent:
@@ -44,8 +48,12 @@ class Agent:
         self.state_size = state_size
         self.action_size = action_size
         self.seed = random.seed(random_seed)
+        self.epsilon=INITIAL_EPSILON
         # Noise process
-        self.noise = OUNoise(action_size, random_seed)
+        # Here, we are reducing our noise vector to just one
+        # node, because we have only one regressor
+        #self.noise = OUNoise(action_size, random_seed)
+        self.noise = OUNoise(1, random_seed)
 
 
         # Actor Network (w/ Target Network)
@@ -95,6 +103,7 @@ class Agent:
             experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples
             gamma (float): discount factor
         """
+
         states, actions, rewards, next_states, dones = experiences
 
         # ---------------------------- update critic ---------------------------- #
@@ -147,7 +156,6 @@ class Agent:
         S1 = Dense(fc_units)(S)
         S1 = GaussianNoise(0.1)(S1)
         S1 = Activation('relu')(S1)
-        S1 = Dropout(0.25)(S1)
         S2 = Dense(fc_units)(S1)
         S2 = GaussianNoise(0.1)(S2)
         S2 = Activation('relu')(S2)
@@ -156,10 +164,12 @@ class Agent:
         A1 = Activation('relu')(A1)
 
         h0 = Add()([A1,S2])
+        h0 = Dense(fc_units)(h0)
+        h0 = GaussianNoise(0.1)(h0)
+        h0 = Activation('relu')(h0)
         h1 = Dense(int(fc_units/4), activation='relu')(h0)
         h1 = GaussianNoise(0.1)(h1)
         h1 = Activation('relu')(h1)
-        h1 = Dropout(0.25)(h1)
         finalOutput = Dense(action_size)(h1)
         finalOutput = LeakyReLU(alpha=0.1)(finalOutput)
         return Model([S,A],finalOutput)
@@ -181,11 +191,14 @@ class Agent:
         h0 = Dense(fc_units)(S)
         h0 = GaussianNoise(0.1)(h0)
         h0 = Activation('relu')(h0)
-        h0 = Dropout(0.25)(h0)
+
         h1 = Dense(fc_units)(h0)
         h1 = GaussianNoise(0.1)(h1)
         h1 = Activation('relu')(h1)
-        h1 = Dropout(0.25)(h1)
+
+        h1 = Dense(fc_units)(h1)
+        h1 = GaussianNoise(0.1)(h1)
+        h1 = Activation('relu')(h1)
 
         Regressor = Dense(1)(h1)
         ActionToTake = Dense(action_size-1,activation='softmax')(h1)
@@ -226,10 +239,17 @@ class Agent:
         # Save experience / reward
         self.memory.add(state, action, reward, next_state, done)
 
+        # Slowly decay the learning rate
+        if self.epsilon > FINAL_EPSILON:
+            self.epsilon -= (INITIAL_EPSILON-FINAL_EPSILON)/EPSILON_DECAY
         # Learn, if enough samples are available in memory
         if len(self.memory) > BATCH_SIZE:
             experiences = self.memory.sample()
             self.learn(experiences, GAMMA)
+
+    def softmax(self,x):
+        """Compute softmax values for each sets of scores in x."""
+        return np.exp(x) / np.sum(np.exp(x), axis=0)
 
     def act(self, state,add_noise):
         """Returns actions for given state as per current policy."""
@@ -239,8 +259,26 @@ class Agent:
         #print("self.actor_local.predict(state) ",self.actor_local.predict(state))
         action = self.actor_local.predict(state)[0]
         if add_noise:
-            action += self.noise.sample()
-        return np.clip(action, 0, 1)
+            """
+            If we are adding noise, we clearly know that we are exploring.
+            The OUNoise was added to the regressor var, and the epsilon greedy
+            will be added to the softmax output
+            """
+            rand_val = np.random.random()
+            if rand_val < self.epsilon:
+                #print("if running")
+                action[:-1] = np.random.random_sample( self.action_size-1 )
+                action[:-1]=self.softmax(action[:-1])
+                action[-1]=10*np.random.random_sample( 1 )
+
+
+
+            action[-1] += self.noise.sample()
+            # print("action new ",action)
+            # The command below was not the right implementation
+            # action[:-1]=self.softmax(action[:-1])
+
+        return action
 
 
 
@@ -280,6 +318,9 @@ class OUNoise:
     def sample(self):
         """Update internal state and return it as a noise sample."""
         x = self.state
-        dx = self.theta * (self.mu - x) + self.sigma * np.array([random.random() for i in range(len(x))])
+        """The 3 was added below, because the regress val is [0,10]
+            and we want it to explore wrt at least 1/3 of the space
+        """
+        dx = self.theta * (self.mu - x) + 3*self.sigma * np.array([random.random() for i in range(len(x))])
         self.state = x + dx
         return self.state
