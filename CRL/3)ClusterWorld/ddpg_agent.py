@@ -21,7 +21,7 @@ TAU = 1e-3              # for soft update of target parameters
 LR_ACTOR = 1e-4         # learning rate of the actor
 LR_CRITIC = 1e-3        # learning rate of the critic
 
-EPSILON_DECAY = 10000
+EPSILON_DECAY = 1000
 FINAL_EPSILON = 0.1
 INITIAL_EPSILON = 1.0
 

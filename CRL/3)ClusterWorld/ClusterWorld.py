@@ -40,7 +40,7 @@ class ClusterWorldEnv:
         self.inheritedN=0
         self._infoRewardMultiplier=1000
         self.penalty=-1
-        self._Quitpenalty=-1000
+        self._Quitpenalty=-10
         self.reward=0
         self.done=False
         self._maxRegressVal=10
@@ -114,6 +114,87 @@ class ClusterWorldEnv:
 
 
 
+    def stepThroughTree(self,action,Up):
+
+        softmaxOut=action[:-1].argmax()
+        regrOut=action[-1]
+        if(softmaxOut==len(self._trueBoundaries) or self.done):
+            # If you are here, then the stop variable has been flagged
+            self.done=True
+            bounds=self._get_state()
+            self.reward=self._Quitpenalty #/(len(self.actionstatepairs)+1)
+            return bounds, self.reward,self.done,None
+
+        # If we have not returned yet, then that means the softmaxOut represents which dim
+        dim=softmaxOut
+        actionMultiFactor=(self.observation_space_Matrix[dim][1]-self.observation_space_Matrix[dim][0])/self._maxRegressVal
+        val=regrOut*actionMultiFactor+self.observation_space_Matrix[dim][0]
+        #print("1val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1]",val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1])
+
+        # to check if the regressor is out of bounds
+        if(val<=self.observation_space_Matrix[dim][0]):
+            lessTh=True
+        else:
+            lessTh=False
+        if(val>=self.observation_space_Matrix[dim][1]):
+            greaterTh=True
+        else:
+            greaterTh=False
+        if(lessTh or greaterTh):
+            # you exceeded the boundary
+            # this includes selecting the boundary
+            # Thus, your action was wrong
+            # Self.done is false because you just picked a wrong value
+            # you can try again
+            # note that the environment will not store this value
+            # however, the S,A,R,S will be stored by the agent
+            self.done=False
+            bounds=self._get_state()
+            if(lessTh):
+                deltaBounds=self.observation_space_Matrix[dim][0]-val
+
+            if(greaterTh):
+                deltaBounds=val-self.observation_space_Matrix[dim][1]
+            self.reward=self._Quitpenalty*(abs(deltaBounds))
+            return bounds, self.reward,self.done,None
+
+        #print("2val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1]",val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1])
+        #Up= int(np.random.random(1)>0.5)
+        #Up=1
+
+        # Checking for a corner case
+        if(len(self.df.index)==0):
+            # There are no elements
+            # Thus, your action was futile
+            self.done=True
+            bounds=self._get_state()
+            self.reward=-1
+            return bounds, self.reward,self.done,None
+
+
+
+        #print("3val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1]",val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1])
+        InfoGain,df1,df2,N1,N2=infoGain(self.df,dim,val,self.observation_space_Matrix[dim][0],self.observation_space_Matrix[dim][1],self.inheritedN)
+
+        self.reward = self._infoRewardMultiplier*InfoGain-self.penalty
+
+
+        if(Up==1):
+            self.df=df1
+            self.inheritedN=N1
+        else:
+            self.df=df2
+            self.inheritedN=N2
+
+        self.actionstatepairs.append([int(dim),val,int(Up)])
+        #print("updatingState")
+        self.updateState()
+
+        bounds=self._get_state()
+
+        return bounds, self.reward,self.done,None
+
+
     def step(self,action):
 
         softmaxOut=action[:-1].argmax()
@@ -122,7 +203,7 @@ class ClusterWorldEnv:
             # If you are here, then the stop variable has been flagged
             self.done=True
             bounds=self._get_state()
-            self.reward=self._Quitpenalty/(len(self.actionstatepairs)+1)
+            self.reward=self._Quitpenalty #/(len(self.actionstatepairs)+1)
             return bounds, self.reward,self.done,None
 
         # If we have not returned yet, then that means the softmaxOut represents which dim
